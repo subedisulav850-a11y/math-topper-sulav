@@ -1,8 +1,3 @@
-"""
-Ultimate Math API – Knows Everything
-Fixes the '+' sign issue by reading raw query parameters
-"""
-
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from typing import Optional, Dict
@@ -12,7 +7,7 @@ import math
 from urllib.parse import unquote
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application
 
-app = FastAPI(title="Ultimate Math API", description="Solves any math problem", version="2.1")
+app = FastAPI(title="Ultimate Math API", description="Solves any math problem", version="3.0")
 
 # SymPy setup
 transformations = standard_transformations + (implicit_multiplication_application,)
@@ -21,16 +16,28 @@ sp.init_printing()
 
 # ========== Helper Functions ==========
 def safe_parse(expr_str: str) -> sp.Expr:
-    """Parse expression with friendly syntax."""
     expr_str = expr_str.replace('×', '*').replace('÷', '/').replace('^', '**')
-    expr_str = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', expr_str)  # 2x -> 2*x
+    expr_str = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', expr_str)
     try:
         return parse_expr(expr_str, transformations=transformations, evaluate=False)
     except Exception as e:
         raise ValueError(f"Syntax error: {str(e)}")
 
+def fix_plus_sign(expr: str) -> str:
+    """
+    If the expression contains a space but no other operators,
+    replace spaces with '+' (because the user likely meant addition).
+    This fixes the '3+8' -> '3 8' -> '3+8' issue.
+    """
+    # If there's already a '+' or other operators, do nothing
+    if '+' in expr or '-' in expr or '*' in expr or '/' in expr or '×' in expr or '÷' in expr or '^' in expr:
+        return expr
+    # If there's a space, replace it with '+'
+    if ' ' in expr:
+        return expr.replace(' ', '+')
+    return expr
+
 def handle_percentage(q: str) -> Optional[sp.Expr]:
-    """Percentage queries: '50% of 10', '20%', 'increase 100 by 20%'"""
     m = re.match(r'^(\d+(?:\.\d+)?)%\s+of\s+(.+)$', q.strip(), re.I)
     if m:
         p = float(m.group(1)) / 100.0
@@ -52,7 +59,6 @@ def handle_percentage(q: str) -> Optional[sp.Expr]:
     return None
 
 def handle_calculus(q: str) -> Optional[Dict]:
-    """Derivative, integral, limit"""
     q_low = q.lower()
     m = re.search(r'(?:derivative|diff|differentiate)\s+(?:of\s+)?(.+?)(?:\s+with respect to\s+(\w+))?$', q_low)
     if m:
@@ -80,7 +86,6 @@ def handle_calculus(q: str) -> Optional[Dict]:
     return None
 
 def handle_equation(q: str) -> Optional[Dict]:
-    """Solve equations and systems"""
     if '=' not in q:
         return None
     eqs = re.split(r',|\sand\s', q)
@@ -99,7 +104,6 @@ def handle_equation(q: str) -> Optional[Dict]:
         return {"type": "system", "solutions": [str(s) for s in sol] if sol else "No solution"}
 
 def handle_matrix(q: str) -> Optional[Dict]:
-    """det, inv, transpose"""
     q_low = q.lower()
     m = re.search(r'det\((.+)\)', q_low)
     if m:
@@ -116,7 +120,6 @@ def handle_matrix(q: str) -> Optional[Dict]:
     return None
 
 def handle_statistics(q: str) -> Optional[Dict]:
-    """mean, median, std"""
     q_low = q.lower()
     m = re.search(r'mean\((.+)\)', q_low)
     if m:
@@ -138,7 +141,6 @@ def handle_statistics(q: str) -> Optional[Dict]:
     return None
 
 def handle_number_theory(q: str) -> Optional[Dict]:
-    """gcd, lcm, fib, factorial, prime factors"""
     q_low = q.lower()
     m = re.search(r'gcd\((.+)\)', q_low)
     if m:
@@ -179,7 +181,6 @@ def handle_number_theory(q: str) -> Optional[Dict]:
     return None
 
 def handle_geometry(q: str) -> Optional[Dict]:
-    """area, volume, pythagorean"""
     q_low = q.lower()
     m = re.search(r'area of circle radius (\d+(?:\.\d+)?)', q_low)
     if m:
@@ -202,7 +203,6 @@ def handle_geometry(q: str) -> Optional[Dict]:
     return None
 
 def handle_unit_conversion(q: str) -> Optional[Dict]:
-    """Convert units"""
     q_low = q.lower()
     conversions = {
         'km to miles': 0.621371, 'miles to km': 1.60934,
@@ -252,7 +252,7 @@ async def root():
             <div class="example">
                 <strong>📌 Examples (try them!):</strong><br>
                 • <a href="/solve?math=3+8">/solve?math=3+8</a> → 11<br>
-                • <a href="/solve?math=50% of 10">/solve?math=50% of 10</a> → 5<br>
+                • <a href="/solve?math=50%25 of 10">/solve?math=50%25 of 10</a> → 5<br>
                 • <a href="/solve?math=5+7-2×8">/solve?math=5+7-2×8</a> → -4<br>
                 • <a href="/solve?math=√144">/solve?math=√144</a> → 12<br>
                 • <a href="/solve?math=derivative of x^3">/solve?math=derivative of x^3</a> → 3*x**2<br>
@@ -285,82 +285,52 @@ async def root():
 
 @app.get("/solve")
 async def solve(request: Request):
-    """
-    Universal math solver that correctly handles '+' signs by reading raw query string.
-    Example: /solve?math=3+8 returns 11
-    """
-    # Get raw query string from request scope (before FastAPI decodes it)
+    # Get raw query string
     raw_query = request.scope.get('query_string', b'').decode('utf-8')
-    
-    # Parse the raw query string manually to preserve '+'
     params = {}
     if raw_query:
         for pair in raw_query.split('&'):
             if '=' in pair:
                 key, value = pair.split('=', 1)
                 params[key] = value
-    
-    # Get the 'math' parameter
     query = params.get('math')
     if not query:
         raise HTTPException(status_code=400, detail="Missing 'math' parameter")
-    
-    # URL-decode the query (this converts %2B back to +)
     query = unquote(query)
     
-    # Now 'query' contains the original expression with '+' preserved
+    # FIX: Convert spaces to '+' when no other operators are present
+    query = fix_plus_sign(query)
     
-    result = None
-    explanation = ""
-
-    # 1. Percentages
+    # Now proceed as before
     pct = handle_percentage(query)
     if pct is not None:
         result = float(pct) if pct.is_number else str(pct)
-        explanation = f"Percentage calculation: {query} = {result}"
-        return JSONResponse(content={"query": query, "result": result, "explanation": explanation})
-
-    # 2. Calculus
+        return JSONResponse(content={"query": query, "result": result, "explanation": f"Percentage: {query} = {result}"})
     calc = handle_calculus(query)
     if calc:
-        return JSONResponse(content={"query": query, "result": calc["result"], "explanation": f"Calculus result: {calc['result']}"})
-
-    # 3. Equation solving
+        return JSONResponse(content={"query": query, "result": calc["result"], "explanation": f"Calculus: {calc['result']}"})
     eq = handle_equation(query)
     if eq:
         return JSONResponse(content={"query": query, "result": eq["solutions"], "explanation": "Equation solved."})
-
-    # 4. Matrix operations
     mat = handle_matrix(query)
     if mat:
         return JSONResponse(content={"query": query, "result": mat["result"], "explanation": f"Matrix {mat['type']}."})
-
-    # 5. Statistics
     stat = handle_statistics(query)
     if stat:
         return JSONResponse(content={"query": query, "result": stat["result"], "explanation": f"Statistics: {stat['type']}."})
-
-    # 6. Number theory
     nt = handle_number_theory(query)
     if nt:
         return JSONResponse(content={"query": query, "result": nt["result"], "explanation": f"Number theory: {nt['type']}."})
-
-    # 7. Geometry
     geo = handle_geometry(query)
     if geo:
         return JSONResponse(content={"query": query, "result": geo["result"], "explanation": f"Geometry: {geo['type']}."})
-
-    # 8. Unit conversion
     unit = handle_unit_conversion(query)
     if unit:
         return JSONResponse(content={"query": query, "result": unit["result"], "explanation": f"Unit conversion: {unit['type']}."})
-
-    # 9. Fallback: evaluate as general arithmetic/algebra
     try:
         expr = safe_parse(query)
         evaluated = expr.evalf() if expr.is_number else expr
         result = float(evaluated) if expr.is_number else str(evaluated)
-        explanation = f"Evaluated expression: {query} = {result}"
-        return JSONResponse(content={"query": query, "result": result, "explanation": explanation})
+        return JSONResponse(content={"query": query, "result": result, "explanation": f"Evaluated: {query} = {result}"})
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not parse or solve: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Cannot solve: {str(e)}")
