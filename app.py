@@ -1,19 +1,17 @@
 """
 Ultimate Math API – Knows Everything
-Handles: arithmetic, percentages, equations, calculus, matrices, statistics, number theory, geometry, unit conversion.
-Fixes the '+' sign URL encoding issue.
+Fixes the '+' sign issue by reading raw query parameters
 """
 
-from fastapi import FastAPI, Query, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from typing import Optional, Union, Any, List, Dict
+from typing import Optional, Dict
 import sympy as sp
-import numpy as np
 import re
 import math
+from urllib.parse import unquote
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application
 
-# ========== Initialization ==========
 app = FastAPI(title="Ultimate Math API", description="Solves any math problem", version="2.1")
 
 # SymPy setup
@@ -26,7 +24,6 @@ def safe_parse(expr_str: str) -> sp.Expr:
     """Parse expression with friendly syntax."""
     expr_str = expr_str.replace('×', '*').replace('÷', '/').replace('^', '**')
     expr_str = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', expr_str)  # 2x -> 2*x
-    expr_str = re.sub(r'([a-zA-Z])(\d)', r'\1*\2', expr_str)  # x2 -> x*2 (rare)
     try:
         return parse_expr(expr_str, transformations=transformations, evaluate=False)
     except Exception as e:
@@ -54,10 +51,9 @@ def handle_percentage(q: str) -> Optional[sp.Expr]:
         return sp.Float(base * (1 - pct/100.0))
     return None
 
-def handle_calculus(q: str) -> Dict:
+def handle_calculus(q: str) -> Optional[Dict]:
     """Derivative, integral, limit"""
     q_low = q.lower()
-    # derivative
     m = re.search(r'(?:derivative|diff|differentiate)\s+(?:of\s+)?(.+?)(?:\s+with respect to\s+(\w+))?$', q_low)
     if m:
         func = m.group(1)
@@ -66,14 +62,12 @@ def handle_calculus(q: str) -> Dict:
         var_sym = sp.symbols(var)
         deriv = sp.diff(expr, var_sym)
         return {"type": "derivative", "result": str(deriv), "simplified": str(sp.simplify(deriv))}
-    # integral
     m = re.search(r'(?:integral|integrate)\s+(.+?)(?:\s+dx\s*)?$', q_low)
     if m:
         func = m.group(1)
         expr = safe_parse(func)
         integral = sp.integrate(expr, x)
         return {"type": "integral", "result": str(integral), "simplified": str(sp.simplify(integral))}
-    # limit
     m = re.search(r'limit\s+(.+?)\s+as\s+(\w+)\s*->\s*(.+)$', q_low)
     if m:
         func = m.group(1)
@@ -85,7 +79,7 @@ def handle_calculus(q: str) -> Dict:
         return {"type": "limit", "result": str(limit_val)}
     return None
 
-def handle_equation(q: str) -> Dict:
+def handle_equation(q: str) -> Optional[Dict]:
     """Solve equations and systems"""
     if '=' not in q:
         return None
@@ -229,10 +223,9 @@ def handle_unit_conversion(q: str) -> Optional[Dict]:
             return {"type": f"convert {conv}", "result": result}
     return None
 
-# ========== Main Solve Endpoint with Raw Query Fix ==========
+# ========== Main Endpoints ==========
 @app.get("/")
 async def root():
-    """Show all available endpoints and examples."""
     html = """
     <!DOCTYPE html>
     <html>
@@ -258,21 +251,20 @@ async def root():
             <div><strong>Main endpoint</strong> – returns JSON with result and explanation.</div>
             <div class="example">
                 <strong>📌 Examples (try them!):</strong><br>
-                • <a href="/solve?math=3%2B8">/solve?math=3%2B8</a> → 11<br>
-                • <a href="/solve?math=50%25%20of%2010">/solve?math=50%25%20of%2010</a> → 5<br>
-                • <a href="/solve?math=5%2B7-2%C3%978">/solve?math=5%2B7-2%C3%978</a> → -4<br>
-                • <a href="/solve?math=%E2%88%9A144">/solve?math=%E2%88%9A144</a> → 12<br>
-                • <a href="/solve?math=derivative%20of%20x%5E3">/solve?math=derivative%20of%20x%5E3</a> → 3*x**2<br>
-                • <a href="/solve?math=integrate%20sin%20x">/solve?math=integrate%20sin%20x</a> → -cos(x)<br>
-                • <a href="/solve?math=solve%20x%5E2%20-%204%20%3D%200">/solve?math=solve%20x%5E2%20-%204%20%3D%200</a> → [-2, 2]<br>
-                • <a href="/solve?math=det(%5B%5B1,2%5D,%5B3,4%5D%5D)">/solve?math=det(%5B%5B1,2%5D,%5B3,4%5D%5D)</a> → -2.0<br>
+                • <a href="/solve?math=3+8">/solve?math=3+8</a> → 11<br>
+                • <a href="/solve?math=50% of 10">/solve?math=50% of 10</a> → 5<br>
+                • <a href="/solve?math=5+7-2×8">/solve?math=5+7-2×8</a> → -4<br>
+                • <a href="/solve?math=√144">/solve?math=√144</a> → 12<br>
+                • <a href="/solve?math=derivative of x^3">/solve?math=derivative of x^3</a> → 3*x**2<br>
+                • <a href="/solve?math=integrate sin x">/solve?math=integrate sin x</a> → -cos(x)<br>
+                • <a href="/solve?math=solve x^2 - 4 = 0">/solve?math=solve x^2 - 4 = 0</a> → [-2, 2]<br>
+                • <a href="/solve?math=det([[1,2],[3,4]])">/solve?math=det([[1,2],[3,4]])</a> → -2.0<br>
                 • <a href="/solve?math=mean(1,2,3,4,5)">/solve?math=mean(1,2,3,4,5)</a> → 3.0<br>
                 • <a href="/solve?math=gcd(24,36)">/solve?math=gcd(24,36)</a> → 12<br>
                 • <a href="/solve?math=fib(10)">/solve?math=fib(10)</a> → 55<br>
-                • <a href="/solve?math=convert%2010%20km%20to%20miles">/solve?math=convert%2010%20km%20to%20miles</a> → 6.21371<br>
-                • <a href="/solve?math=area%20of%20circle%20radius%205">/solve?math=area%20of%20circle%20radius%205</a> → 78.5398<br>
-                • <a href="/solve?math=hypotenuse%20a%3D3%20b%3D4">/solve?math=hypotenuse%20a%3D3%20b%3D4</a> → 5.0<br>
-                • <strong>+ hundreds more!</strong>
+                • <a href="/solve?math=convert 10 km to miles">/solve?math=convert 10 km to miles</a> → 6.21371<br>
+                • <a href="/solve?math=area of circle radius 5">/solve?math=area of circle radius 5</a> → 78.5398<br>
+                • <a href="/solve?math=hypotenuse a=3 b=4">/solve?math=hypotenuse a=3 b=4</a> → 5.0<br>
             </div>
         </div>
 
@@ -284,7 +276,7 @@ async def root():
 
         <div class="docs">
             📖 <strong>Interactive docs:</strong> <a href="/docs">/docs</a> (Swagger UI) &nbsp;|&nbsp; <a href="/redoc">/redoc</a> (ReDoc)<br>
-            💡 <strong>Note:</strong> Use <code>%2B</code> instead of <code>+</code> in URLs, or the API automatically fixes it.
+            💡 <strong>Note:</strong> Now <code>/solve?math=3+8</code> works perfectly!
         </div>
     </body>
     </html>
@@ -292,26 +284,31 @@ async def root():
     return HTMLResponse(content=html)
 
 @app.get("/solve")
-async def solve(request: Request, math: Optional[str] = Query(None, description="Math expression to solve")):
-    """Universal math solver with automatic '+' fix."""
-    # Get raw query string to properly handle '+' sign
-    raw_query = request.url.query
+async def solve(request: Request):
+    """
+    Universal math solver that correctly handles '+' signs by reading raw query string.
+    Example: /solve?math=3+8 returns 11
+    """
+    # Get raw query string from request scope (before FastAPI decodes it)
+    raw_query = request.scope.get('query_string', b'').decode('utf-8')
+    
+    # Parse the raw query string manually to preserve '+'
     params = {}
     if raw_query:
         for pair in raw_query.split('&'):
             if '=' in pair:
                 key, value = pair.split('=', 1)
                 params[key] = value
-    # Prefer raw 'math' parameter, fallback to decoded Query
-    query_str = params.get('math', math)
-    if not query_str:
+    
+    # Get the 'math' parameter
+    query = params.get('math')
+    if not query:
         raise HTTPException(status_code=400, detail="Missing 'math' parameter")
     
-    # Decode URL percent-encoding (e.g., %2B -> +) but preserve '+' as '+'
-    from urllib.parse import unquote
-    query = unquote(query_str)
+    # URL-decode the query (this converts %2B back to +)
+    query = unquote(query)
     
-    # Now query is correct: "5+7" stays "5+7", spaces become spaces, etc.
+    # Now 'query' contains the original expression with '+' preserved
     
     result = None
     explanation = ""
