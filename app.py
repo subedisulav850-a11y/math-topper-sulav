@@ -14,7 +14,21 @@ transformations = standard_transformations + (implicit_multiplication_applicatio
 x, y, z, t = sp.symbols('x y z t')
 sp.init_printing()
 
-# ========== Helper Functions ==========
+# ========== FIX: Convert spaces to '+' when user meant addition ==========
+def fix_plus_sign(expr: str) -> str:
+    """
+    When we receive '3 8' (because '+' became space), convert to '3+8'
+    Only do this if there are no other operators in the expression.
+    """
+    # If there's already any operator, leave it alone
+    if any(op in expr for op in ('+', '-', '*', '/', '×', '÷', '^')):
+        return expr
+    # If there's a space, replace with '+'
+    if ' ' in expr:
+        return expr.replace(' ', '+')
+    return expr
+
+# ========== All your existing helper functions (unchanged) ==========
 def safe_parse(expr_str: str) -> sp.Expr:
     expr_str = expr_str.replace('×', '*').replace('÷', '/').replace('^', '**')
     expr_str = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', expr_str)
@@ -22,20 +36,6 @@ def safe_parse(expr_str: str) -> sp.Expr:
         return parse_expr(expr_str, transformations=transformations, evaluate=False)
     except Exception as e:
         raise ValueError(f"Syntax error: {str(e)}")
-
-def fix_plus_sign(expr: str) -> str:
-    """
-    If the expression contains a space but no other operators,
-    replace spaces with '+' (because the user likely meant addition).
-    This fixes the '3+8' -> '3 8' -> '3+8' issue.
-    """
-    # If there's already a '+' or other operators, do nothing
-    if '+' in expr or '-' in expr or '*' in expr or '/' in expr or '×' in expr or '÷' in expr or '^' in expr:
-        return expr
-    # If there's a space, replace it with '+'
-    if ' ' in expr:
-        return expr.replace(' ', '+')
-    return expr
 
 def handle_percentage(q: str) -> Optional[sp.Expr]:
     m = re.match(r'^(\d+(?:\.\d+)?)%\s+of\s+(.+)$', q.strip(), re.I)
@@ -285,7 +285,7 @@ async def root():
 
 @app.get("/solve")
 async def solve(request: Request):
-    # Get raw query string
+    # Get raw query string to preserve original characters
     raw_query = request.scope.get('query_string', b'').decode('utf-8')
     params = {}
     if raw_query:
@@ -296,12 +296,13 @@ async def solve(request: Request):
     query = params.get('math')
     if not query:
         raise HTTPException(status_code=400, detail="Missing 'math' parameter")
+    # Decode percent-encoded characters (e.g., %2B -> +)
     query = unquote(query)
     
-    # FIX: Convert spaces to '+' when no other operators are present
+    # CRITICAL FIX: Convert "3 8" to "3+8" if no other operators present
     query = fix_plus_sign(query)
     
-    # Now proceed as before
+    # Now process as before
     pct = handle_percentage(query)
     if pct is not None:
         result = float(pct) if pct.is_number else str(pct)
